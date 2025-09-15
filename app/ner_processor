@@ -1,0 +1,119 @@
+
+import re
+from datetime import datetime
+import jdatetime
+
+class NERProcessor:
+    def __init__(self):
+        self.patterns = {
+            'invoice_number': [
+                r'شماره فاکتور[:\\s]*([0-9]+-[0-9]+)',
+                r'فاکتور[:\\s]*([0-9A-Z]+)',
+                r'INVOICE[:\\s]*([0-9A-Z-]+)'
+            ],
+            'date': [
+                r'تاریخ[:\\s]*([0-9]{4}/[0-9]{2}/[0-9]{2})',
+                r'تاریخ[:\\s]*([0-9]{2}/[0-9]{2}/[0-9]{4})',
+                r'DATE[:\\s]*([0-9]{4}-[0-9]{2}-[0-9]{2})'
+            ],
+            'amount': [
+                r'مبلغ[:\\s]*([0-9,]+)',
+                r'قیمت[:\\s]*([0-9,]+)',
+                r'AMOUNT[:\\s]*([0-9,.]+)'
+            ],
+            'company': [
+                r'شرکت[:\\s]*(.+?)\\n',
+                r'COMPANY[:\\s]*(.+?)\\n'
+            ]
+        }
+    
+    def extract_entities(self, text):
+        """
+        استخراج موجودیت‌ها از متن با استفاده از الگوهای از پیش تعریف شده
+        """
+        entities = {}
+        
+        for entity_type, patterns in self.patterns.items():
+            entities[entity_type] = []
+            for pattern in patterns:
+                matches = re.findall(pattern, text, re.IGNORECASE)
+                for match in matches:
+                    if match:
+                        # پاکسازی و نرمال‌سازی نتیجه
+                        cleaned_match = self.clean_text(match)
+                        if cleaned_match and cleaned_match not in entities[entity_type]:
+                            entities[entity_type].append(cleaned_match)
+        
+        return self.post_process_entities(entities)
+    
+    def clean_text(self, text):
+        """
+        پاکسازی متن استخراج شده
+        """
+        # حذف فاصله‌های اضافی و کاراکترهای خاص
+        text = re.sub(r'\\s+', ' ', text).strip()
+        text = re.sub(r'[:\\-\\*\\+]', '', text).strip()
+        return text
+    
+    def post_process_entities(self, entities):
+        """
+        پردازش پس از استخراج برای نرمال‌سازی نتایج
+        """
+        # پردازش تاریخ‌ها
+        if 'date' in entities and entities['date']:
+            processed_dates = []
+            for date_str in entities['date']:
+                try:
+                    # تبدیل تاریخ شمسی به میلادی اگر نیاز باشد
+                    if '/' in date_str and len(date_str.split('/')[0]) == 4:
+                        year, month, day = map(int, date_str.split('/'))
+                        jalali_date = jdatetime.date(year, month, day)
+                        gregorian_date = jalali_date.togregorian()
+                        processed_dates.append(gregorian_date.strftime('%Y-%m-%d'))
+                    else:
+                        processed_dates.append(date_str)
+                except:
+                    processed_dates.append(date_str)
+            entities['date'] = processed_dates
+        
+        # پردازش مبالغ
+        if 'amount' in entities and entities['amount']:
+            processed_amounts = []
+            for amount_str in entities['amount']:
+                # حذف کاما از اعداد
+                clean_amount = amount_str.replace(',', '')
+                try:
+                    processed_amounts.append(str(int(clean_amount)))
+                except:
+                    processed_amounts.append(clean_amount)
+            entities['amount'] = processed_amounts
+        
+        return entities
+    
+    def validate_invoice(self, entities):
+        """
+        اعتبارسنجی اطلاعات استخراج شده
+        """
+        validation_results = {
+            'is_valid': True,
+            'missing_fields': [],
+            'validation_errors': []
+        }
+        
+        # بررسی فیلدهای ضروری
+        required_fields = ['invoice_number', 'date', 'amount']
+        for field in required_fields:
+            if not entities.get(field) or not entities[field]:
+                validation_results['missing_fields'].append(field)
+                validation_results['is_valid'] = False
+        
+        # اعتبارسنجی تاریخ
+        if 'date' in entities and entities['date']:
+            try:
+                date_str = entities['date'][0]
+                datetime.strptime(date_str, '%Y-%m-%d')
+            except:
+                validation_results['validation_errors'].append('فرمت تاریخ نامعتبر')
+                validation_results['is_valid'] = False
+        
+        return validation_results
